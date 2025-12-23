@@ -1,76 +1,80 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>Finger Runner</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+<title>Finger Runner</title>
 
-  <link rel="manifest" href="manifest.json" />
-  <meta name="theme-color" content="#0b0b0b" />
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b0b0b">
 
-  <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: #0b0b0b;
-      overflow: hidden;
-      touch-action: none;
-      font-family: system-ui, sans-serif;
-    }
-    canvas { display: block; }
-  </style>
+<style>
+html,body{
+  margin:0;
+  padding:0;
+  background:#0b0b0b;
+  overflow:hidden;
+  touch-action:none;
+  font-family:system-ui,sans-serif;
+}
+canvas{display:block}
+</style>
 </head>
 
 <body>
 <canvas id="game"></canvas>
 
 <script>
-/* ================= META ================= */
-console.log("Finger Runner v8");
+/* ======================================================
+   Finger Runner v10
+   MENU + MODES + LEVELS 1–3 (REAL DIFFERENCES)
+====================================================== */
+console.log("Finger Runner v10");
 
 /* ================= CANVAS ================= */
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
-function resize() {
+function resize(){
   canvas.width = innerWidth;
   canvas.height = innerHeight;
 }
 resize();
 addEventListener("resize", resize);
 
-/* ================= GAME STATE ================= */
+/* ================= SCREENS ================= */
 let screen = "MENU"; // MENU | GAME | LEVEL_SELECT
-let gameMode = "ENDLESS"; // ENDLESS | GLOBAL | LEVEL
-let levelNumber = 1;
 let running = false;
 
+/* ================= MODES ================= */
+let gameMode = "ENDLESS"; // ENDLESS | GLOBAL | LEVEL
+let levelNumber = 1;
+
 /* ================= CONSTANTS ================= */
-const R = 14;
-const SAFE_GAP = R * 4;
-const BLOCK_H = 26;
+let BALL_RADIUS = 14;
+let BLOCK_HEIGHT = 26;
+let GAP_MULT = 4;
+let BASE_SPEED = 2;
+
 const GLOBAL_SEED = 1337;
 
 /* ================= STORAGE ================= */
 let bestScore = +localStorage.getItem("bestScore") || 0;
 
-/* ================= GAME DATA ================= */
+/* ================= GAME STATE ================= */
 let score = 0;
 let speed = 2;
-let patternIndex = 0;
 let spawnDist = 0;
+let patternIndex = 0;
 
-let startAnim = 0;
-let shake = 0;
-
-const player = { x: 0, y: 0, r: R };
+const player = { x: 0, y: 0, r: BALL_RADIUS };
 let target = { x: 0, y: 0 };
 let obstacles = [];
 let gates = [];
 
 /* ================= RNG ================= */
-function mulberry32(a) {
-  return function () {
+function mulberry32(a){
+  return function(){
     let t = (a += 0x6d2b79f5);
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
@@ -79,54 +83,98 @@ function mulberry32(a) {
 }
 let rand = Math.random;
 
-/* ================= SETUP ================= */
-function setupGame() {
-  patternIndex = 0;
+/* ================= LEVEL DEFINITIONS ================= */
+const LEVELS = {
+  1: {
+    ball: 14,
+    blockH: 26,
+    gap: 4,
+    speed: 2.0,
+    theme: { player:"#00ff88", block:"#ff5c5c" },
+    pattern: "CENTER"
+  },
+  2: {
+    ball: 12,
+    blockH: 30,
+    gap: 3.5,
+    speed: 2.3,
+    theme: { player:"#4da6ff", block:"#ffd166" },
+    pattern: "ZIGZAG"
+  },
+  3: {
+    ball: 18,
+    blockH: 22,
+    gap: 5,
+    speed: 2.1,
+    theme: { player:"#c77dff", block:"#ff8fab" },
+    pattern: "WAVE"
+  }
+};
+
+/* ================= SETUP GAME ================= */
+function setupGame(){
+  score = 0;
   spawnDist = 0;
+  patternIndex = 0;
   obstacles = [];
   gates = [];
-  score = 0;
-  startAnim = 1;
+
+  if(gameMode === "ENDLESS"){
+    BALL_RADIUS = 14;
+    BLOCK_HEIGHT = 26;
+    GAP_MULT = 4;
+    BASE_SPEED = 2;
+    rand = Math.random;
+  }
+
+  if(gameMode === "GLOBAL"){
+    BALL_RADIUS = 14;
+    BLOCK_HEIGHT = 26;
+    GAP_MULT = 4;
+    BASE_SPEED = 2;
+    rand = mulberry32(GLOBAL_SEED);
+  }
+
+  if(gameMode === "LEVEL"){
+    const L = LEVELS[levelNumber];
+    BALL_RADIUS = L.ball;
+    BLOCK_HEIGHT = L.blockH;
+    GAP_MULT = L.gap;
+    BASE_SPEED = L.speed;
+    rand = mulberry32(levelNumber * 1000);
+  }
+
+  speed = BASE_SPEED;
+  player.r = BALL_RADIUS;
 
   player.x = canvas.width / 2;
   player.y = canvas.height - 120;
   target.x = player.x;
   target.y = player.y;
-
-  if (gameMode === "ENDLESS") {
-    speed = 2;
-    rand = Math.random;
-  }
-
-  if (gameMode === "GLOBAL") {
-    speed = 2;
-    rand = mulberry32(GLOBAL_SEED);
-  }
-
-  if (gameMode === "LEVEL") {
-    speed = 1.8 + levelNumber * 0.25;
-    rand = mulberry32(levelNumber * 1000);
-  }
 }
 
 /* ================= INPUT ================= */
-function onStart(x, y) {
-  if (screen === "MENU") {
-    if (y < canvas.height / 2 - 10) gameMode = "ENDLESS";
-    else if (y < canvas.height / 2 + 25) gameMode = "GLOBAL";
-    else { screen = "LEVEL_SELECT"; return; }
-
-    screen = "GAME";
+function onStart(x,y){
+  if(screen === "MENU"){
+    if(y < canvas.height/2 - 10){
+      gameMode = "ENDLESS";
+      screen = "GAME";
+    } else if(y < canvas.height/2 + 30){
+      gameMode = "GLOBAL";
+      screen = "GAME";
+    } else {
+      screen = "LEVEL_SELECT";
+      return;
+    }
     setupGame();
     running = true;
     return;
   }
 
-  if (screen === "LEVEL_SELECT") {
-    const col = Math.floor(x / (canvas.width / 5));
-    const row = Math.floor((y - canvas.height / 2 + 60) / 50);
-    levelNumber = row * 5 + col + 1;
-    if (levelNumber <= 10) {
+  if(screen === "LEVEL_SELECT"){
+    const index = Math.floor((y - canvas.height/2) / 50) + 1;
+    if(index >= 1 && index <= 3){
+      levelNumber = index;
       gameMode = "LEVEL";
       screen = "GAME";
       setupGame();
@@ -138,44 +186,57 @@ function onStart(x, y) {
   running = true;
 }
 
-function onMove(x, y) {
-  if (screen === "GAME" && running) {
+function onMove(x,y){
+  if(screen === "GAME" && running){
     target.x = x;
     target.y = y;
   }
 }
 
-canvas.addEventListener("touchstart", e => onStart(e.touches[0].clientX, e.touches[0].clientY));
-canvas.addEventListener("touchmove", e => onMove(e.touches[0].clientX, e.touches[0].clientY));
-canvas.addEventListener("mousedown", e => onStart(e.clientX, e.clientY));
-canvas.addEventListener("mousemove", e => onMove(e.clientX, e.clientY));
+canvas.addEventListener("touchstart",e=>onStart(e.touches[0].clientX,e.touches[0].clientY));
+canvas.addEventListener("touchmove",e=>onMove(e.touches[0].clientX,e.touches[0].clientY));
+canvas.addEventListener("mousedown",e=>onStart(e.clientX,e.clientY));
+canvas.addEventListener("mousemove",e=>onMove(e.clientX,e.clientY));
 
-/* ================= SPAWN ================= */
-function spawnGate() {
+/* ================= SPAWN GATES ================= */
+function spawnGate(){
+  const SAFE_GAP = BALL_RADIUS * GAP_MULT;
+  let gapX;
+
   const r = rand();
-  const t = patternIndex % 3;
+  const t = patternIndex;
 
-  let gapX =
-    t === 0 ? canvas.width * 0.5 :
-    t === 1 ? (r * 0.6 + 0.2) * canvas.width :
-    (Math.sin(patternIndex * 0.6 + r * 2) * 0.35 + 0.5) * canvas.width;
+  if(gameMode === "LEVEL"){
+    const pattern = LEVELS[levelNumber].pattern;
+    if(pattern === "CENTER"){
+      gapX = canvas.width * 0.5;
+    }
+    if(pattern === "ZIGZAG"){
+      gapX = (t % 2 ? 0.7 : 0.3) * canvas.width;
+    }
+    if(pattern === "WAVE"){
+      gapX = (Math.sin(t * 0.7) * 0.35 + 0.5) * canvas.width;
+    }
+  } else {
+    gapX = (r * 0.6 + 0.2) * canvas.width;
+  }
 
   gapX -= SAFE_GAP / 2;
   gapX = Math.max(20, Math.min(canvas.width - SAFE_GAP - 20, gapX));
 
-  const gate = { y: -BLOCK_H, scored: false };
+  const gate = { y: -BLOCK_HEIGHT, scored:false };
   gates.push(gate);
 
   obstacles.push(
-    { x: 0, y: gate.y, w: gapX, h: BLOCK_H, gate },
-    { x: gapX + SAFE_GAP, y: gate.y, w: canvas.width - (gapX + SAFE_GAP), h: BLOCK_H, gate }
+    { x:0, y:gate.y, w:gapX, h:BLOCK_HEIGHT, gate },
+    { x:gapX + SAFE_GAP, y:gate.y, w:canvas.width - (gapX + SAFE_GAP), h:BLOCK_HEIGHT, gate }
   );
 
   patternIndex++;
 }
 
 /* ================= COLLISION ================= */
-function hit(o) {
+function hit(o){
   return (
     player.x + player.r > o.x &&
     player.x - player.r < o.x + o.w &&
@@ -185,12 +246,12 @@ function hit(o) {
 }
 
 /* ================= LOOP ================= */
-function loop() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+function loop(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  if (screen === "MENU") drawMenu();
-  if (screen === "LEVEL_SELECT") drawLevelSelect();
-  if (screen === "GAME") {
+  if(screen === "MENU") drawMenu();
+  if(screen === "LEVEL_SELECT") drawLevelSelect();
+  if(screen === "GAME"){
     updateGame();
     drawGame();
   }
@@ -198,32 +259,32 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-function updateGame() {
-  if (!running) return;
+function updateGame(){
+  if(!running) return;
 
   player.x += (target.x - player.x) * 0.22;
   player.y += (target.y - player.y) * 0.22;
 
   spawnDist += speed;
-  if (spawnDist > 120) {
+  if(spawnDist > 120){
     spawnGate();
     spawnDist = 0;
   }
 
-  gates.forEach(g => {
+  gates.forEach(g=>{
     g.y += speed;
-    if (!g.scored && g.y > player.y) {
+    if(!g.scored && g.y > player.y){
       g.scored = true;
       score++;
     }
   });
 
-  obstacles.forEach(o => o.y = o.gate.y);
-  obstacles = obstacles.filter(o => o.y < canvas.height + 40);
-  gates = gates.filter(g => g.y < canvas.height + 40);
+  obstacles.forEach(o=>o.y = o.gate.y);
+  obstacles = obstacles.filter(o=>o.y < canvas.height + 40);
+  gates = gates.filter(g=>g.y < canvas.height + 40);
 
-  for (const o of obstacles) {
-    if (hit(o)) {
+  for(const o of obstacles){
+    if(hit(o)){
       bestScore = Math.max(bestScore, score);
       localStorage.setItem("bestScore", bestScore);
       screen = "MENU";
@@ -236,67 +297,66 @@ function updateGame() {
 }
 
 /* ================= DRAW ================= */
-function drawBackground() {
-  const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  g.addColorStop(0, "#0e0e0e");
-  g.addColorStop(1, "#000");
+function drawBackground(){
+  const g = ctx.createLinearGradient(0,0,0,canvas.height);
+  g.addColorStop(0,"#0e0e0e");
+  g.addColorStop(1,"#000");
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0,0,canvas.width,canvas.height);
 }
 
-function drawGame() {
+function drawGame(){
   drawBackground();
 
-  ctx.fillStyle = "#00ff88";
+  const theme =
+    gameMode === "LEVEL"
+      ? LEVELS[levelNumber].theme
+      : { player:"#00ff88", block:"#ff5c5c" };
+
+  ctx.fillStyle = theme.player;
   ctx.beginPath();
-  ctx.arc(player.x, player.y, player.r, 0, Math.PI * 2);
+  ctx.arc(player.x,player.y,player.r,0,Math.PI*2);
   ctx.fill();
 
-  obstacles.forEach(o => {
-    ctx.fillStyle = "#ff5c5c";
-    ctx.fillRect(o.x, o.y, o.w, o.h);
+  obstacles.forEach(o=>{
+    ctx.fillStyle = theme.block;
+    ctx.fillRect(o.x,o.y,o.w,o.h);
   });
 
-  ctx.fillStyle = "#fff";
-  ctx.font = "14px monospace";
-  ctx.fillText(`Score: ${score}`, 20, 28);
+  ctx.fillStyle="#fff";
+  ctx.font="14px monospace";
+  ctx.fillText(`Score: ${score}`,20,28);
 }
 
-function drawMenu() {
+function drawMenu(){
   drawBackground();
-  ctx.fillStyle = "#00ff88";
-  ctx.font = "28px sans-serif";
-  ctx.fillText("Finger Runner", canvas.width / 2 - 110, canvas.height / 2 - 100);
+  ctx.fillStyle="#00ff88";
+  ctx.font="28px sans-serif";
+  ctx.fillText("Finger Runner",canvas.width/2-110,canvas.height/2-100);
 
-  ctx.font = "18px sans-serif";
-  ctx.fillStyle = "#fff";
-  ctx.fillText("▶ Endless", canvas.width / 2 - 55, canvas.height / 2 - 20);
-  ctx.fillText("🌍 Global Run", canvas.width / 2 - 70, canvas.height / 2 + 15);
-  ctx.fillText("🎯 Levels", canvas.width / 2 - 50, canvas.height / 2 + 50);
-
-  ctx.font = "13px monospace";
-  ctx.fillStyle = "#aaa";
-  ctx.fillText("Tap to select mode", canvas.width / 2 - 80, canvas.height / 2 + 90);
+  ctx.font="18px sans-serif";
+  ctx.fillStyle="#fff";
+  ctx.fillText("▶ Endless",canvas.width/2-55,canvas.height/2-20);
+  ctx.fillText("🌍 Global Run",canvas.width/2-70,canvas.height/2+15);
+  ctx.fillText("🎯 Levels 1–3",canvas.width/2-65,canvas.height/2+50);
 }
 
-function drawLevelSelect() {
+function drawLevelSelect(){
   drawBackground();
-  ctx.fillStyle = "#fff";
-  ctx.font = "20px sans-serif";
-  ctx.fillText("Select Level", canvas.width / 2 - 70, canvas.height / 2 - 90);
+  ctx.fillStyle="#fff";
+  ctx.font="20px sans-serif";
+  ctx.fillText("Select Level",canvas.width/2-70,canvas.height/2-80);
 
-  ctx.font = "16px monospace";
-  for (let i = 1; i <= 10; i++) {
-    const x = ((i - 1) % 5) * (canvas.width / 5) + 30;
-    const y = canvas.height / 2 + Math.floor((i - 1) / 5) * 50;
-    ctx.fillText(`Level ${i}`, x, y);
+  ctx.font="16px monospace";
+  for(let i=1;i<=3;i++){
+    ctx.fillText(`Level ${i}`,canvas.width/2-30,canvas.height/2 + i*40);
   }
 }
 
 loop();
 
 /* ================= SERVICE WORKER ================= */
-if ("serviceWorker" in navigator) {
+if("serviceWorker" in navigator){
   navigator.serviceWorker.register("sw.js");
 }
 </script>
