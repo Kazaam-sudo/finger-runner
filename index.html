@@ -2,18 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, user-scalable=no"
-  />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <title>Finger Runner</title>
 
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#0b0b0b" />
 
   <style>
-    html,
-    body {
+    html, body {
       margin: 0;
       padding: 0;
       background: #0b0b0b;
@@ -21,21 +17,58 @@
       touch-action: none;
       font-family: system-ui, sans-serif;
     }
-    canvas {
-      display: block;
-    }
+    canvas { display: block; }
   </style>
 </head>
 
 <body>
-  <canvas id="game"></canvas>
+<canvas id="game"></canvas>
 
-  <script>
-    console.log("FINGER RUNNER v7 — POLISH");
+<script>
+/* ================= META ================= */
+console.log("Finger Runner v8");
 
-    // ================= SEED =================
-let SEED = 1337; // один и тот же уровень для всех
+/* ================= CANVAS ================= */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
 
+function resize() {
+  canvas.width = innerWidth;
+  canvas.height = innerHeight;
+}
+resize();
+addEventListener("resize", resize);
+
+/* ================= GAME STATE ================= */
+let screen = "MENU"; // MENU | GAME | LEVEL_SELECT
+let gameMode = "ENDLESS"; // ENDLESS | GLOBAL | LEVEL
+let levelNumber = 1;
+let running = false;
+
+/* ================= CONSTANTS ================= */
+const R = 14;
+const SAFE_GAP = R * 4;
+const BLOCK_H = 26;
+const GLOBAL_SEED = 1337;
+
+/* ================= STORAGE ================= */
+let bestScore = +localStorage.getItem("bestScore") || 0;
+
+/* ================= GAME DATA ================= */
+let score = 0;
+let speed = 2;
+let patternIndex = 0;
+let spawnDist = 0;
+
+let startAnim = 0;
+let shake = 0;
+
+const player = { x: 0, y: 0, r: R };
+let target = { x: 0, y: 0 };
+let obstacles = [];
+let gates = [];
+
+/* ================= RNG ================= */
 function mulberry32(a) {
   return function () {
     let t = (a += 0x6d2b79f5);
@@ -44,120 +77,90 @@ function mulberry32(a) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+let rand = Math.random;
 
-let rand = mulberry32(SEED);
+/* ================= SETUP ================= */
+function setupGame() {
+  patternIndex = 0;
+  spawnDist = 0;
+  obstacles = [];
+  gates = [];
+  score = 0;
+  startAnim = 1;
 
+  player.x = canvas.width / 2;
+  player.y = canvas.height - 120;
+  target.x = player.x;
+  target.y = player.y;
 
-    /* ================= CANVAS ================= */
-    const canvas = document.getElementById("game");
-    const ctx = canvas.getContext("2d");
+  if (gameMode === "ENDLESS") {
+    speed = 2;
+    rand = Math.random;
+  }
 
-    function resize() {
-      canvas.width = innerWidth;
-      canvas.height = innerHeight;
+  if (gameMode === "GLOBAL") {
+    speed = 2;
+    rand = mulberry32(GLOBAL_SEED);
+  }
+
+  if (gameMode === "LEVEL") {
+    speed = 1.8 + levelNumber * 0.25;
+    rand = mulberry32(levelNumber * 1000);
+  }
+}
+
+/* ================= INPUT ================= */
+function onStart(x, y) {
+  if (screen === "MENU") {
+    if (y < canvas.height / 2 - 10) gameMode = "ENDLESS";
+    else if (y < canvas.height / 2 + 25) gameMode = "GLOBAL";
+    else { screen = "LEVEL_SELECT"; return; }
+
+    screen = "GAME";
+    setupGame();
+    running = true;
+    return;
+  }
+
+  if (screen === "LEVEL_SELECT") {
+    const col = Math.floor(x / (canvas.width / 5));
+    const row = Math.floor((y - canvas.height / 2 + 60) / 50);
+    levelNumber = row * 5 + col + 1;
+    if (levelNumber <= 10) {
+      gameMode = "LEVEL";
+      screen = "GAME";
+      setupGame();
+      running = true;
     }
-    resize();
-    addEventListener("resize", resize);
+    return;
+  }
 
-    /* ================= STATE ================= */
-    let screen = "MENU"; // MENU | GAME
-    let running = false;
+  running = true;
+}
 
-    /* ================= CONSTANTS ================= */
-    const R = 14;
-    const SAFE_GAP = R * 4;
-    const BLOCK_H = 26;
+function onMove(x, y) {
+  if (screen === "GAME" && running) {
+    target.x = x;
+    target.y = y;
+  }
+}
 
-    /* ================= STORAGE ================= */
-    let bestScore = +localStorage.getItem("bestScore") || 0;
+canvas.addEventListener("touchstart", e => onStart(e.touches[0].clientX, e.touches[0].clientY));
+canvas.addEventListener("touchmove", e => onMove(e.touches[0].clientX, e.touches[0].clientY));
+canvas.addEventListener("mousedown", e => onStart(e.clientX, e.clientY));
+canvas.addEventListener("mousemove", e => onMove(e.clientX, e.clientY));
 
-    /* ================= GAME DATA ================= */
-    let score = 0;
-    let speed = 2;
-    let patternIndex = 0;
-    let spawnDist = 0;
-
-    let startAnim = 0;
-    let flash = 0;
-
-    const player = {
-      x: canvas.width / 2,
-      y: canvas.height - 120,
-      r: R,
-    };
-
-    let target = { x: player.x, y: player.y };
-    let obstacles = [];
-    let gates = [];
-
-    /* ================= SHAKE ================= */
-    let shake = 0;
-    function addShake(power = 8) {
-      shake = power;
-    }
-
-    function applyShake() {
-      if (shake > 0.01) {
-        ctx.translate(
-          Math.sin(Date.now() * 0.1) * shake,
-          Math.cos(Date.now() * 0.13) * shake
-        );
-        shake *= 0.85;
-      } else {
-        shake = 0;
-      }
-    }
-
-    /* ================= INPUT ================= */
-    function handleStart(x, y) {
-      if (screen === "MENU") {
-        screen = "GAME";
-        resetGame();
-        rand = mulberry32(SEED);
-        running = true;
-      } else if (screen === "GAME") {
-        running = true;
-        target.x = x;
-        target.y = y;
-      }
-    }
-
-    function handleMove(x, y) {
-      if (screen === "GAME" && running) {
-        target.x = x;
-        target.y = y;
-      }
-    }
-
-    canvas.addEventListener("touchstart", (e) => {
-      const t = e.touches[0];
-      handleStart(t.clientX, t.clientY);
-    });
-    canvas.addEventListener("touchmove", (e) => {
-      const t = e.touches[0];
-      handleMove(t.clientX, t.clientY);
-    });
-    canvas.addEventListener("mousedown", (e) =>
-      handleStart(e.clientX, e.clientY)
-    );
-    canvas.addEventListener("mousemove", (e) =>
-      handleMove(e.clientX, e.clientY)
-    );
-
-    /* ================= GATES ================= */
-    function spawnGate() {
-  let gapX;
+/* ================= SPAWN ================= */
+function spawnGate() {
+  const r = rand();
   const t = patternIndex % 3;
-  const r = rand(); // детерминированный рандом
 
-  if (t === 0) gapX = canvas.width * 0.5 - SAFE_GAP / 2;
-  if (t === 1) gapX = (r * 0.6 + 0.2) * canvas.width - SAFE_GAP / 2;
-  if (t === 2)
-    gapX =
-      (Math.sin(patternIndex * 0.6 + r * 2) * 0.35 + 0.5) *
-        canvas.width -
-      SAFE_GAP / 2;
+  let gapX =
+    t === 0 ? canvas.width * 0.5 :
+    t === 1 ? (r * 0.6 + 0.2) * canvas.width :
+    (Math.sin(patternIndex * 0.6 + r * 2) * 0.35 + 0.5) * canvas.width;
 
+  gapX -= SAFE_GAP / 2;
   gapX = Math.max(20, Math.min(canvas.width - SAFE_GAP - 20, gapX));
 
   const gate = { y: -BLOCK_H, scored: false };
@@ -165,186 +168,137 @@ let rand = mulberry32(SEED);
 
   obstacles.push(
     { x: 0, y: gate.y, w: gapX, h: BLOCK_H, gate },
-    {
-      x: gapX + SAFE_GAP,
-      y: gate.y,
-      w: canvas.width - (gapX + SAFE_GAP),
-      h: BLOCK_H,
-      gate,
-    }
+    { x: gapX + SAFE_GAP, y: gate.y, w: canvas.width - (gapX + SAFE_GAP), h: BLOCK_H, gate }
   );
 
   patternIndex++;
 }
 
-    /* ================= COLLISION ================= */
-    function hit(o) {
-      return (
-        player.x + player.r > o.x &&
-        player.x - player.r < o.x + o.w &&
-        player.y + player.r > o.y &&
-        player.y - player.r < o.y + o.h
-      );
+/* ================= COLLISION ================= */
+function hit(o) {
+  return (
+    player.x + player.r > o.x &&
+    player.x - player.r < o.x + o.w &&
+    player.y + player.r > o.y &&
+    player.y - player.r < o.y + o.h
+  );
+}
+
+/* ================= LOOP ================= */
+function loop() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (screen === "MENU") drawMenu();
+  if (screen === "LEVEL_SELECT") drawLevelSelect();
+  if (screen === "GAME") {
+    updateGame();
+    drawGame();
+  }
+
+  requestAnimationFrame(loop);
+}
+
+function updateGame() {
+  if (!running) return;
+
+  player.x += (target.x - player.x) * 0.22;
+  player.y += (target.y - player.y) * 0.22;
+
+  spawnDist += speed;
+  if (spawnDist > 120) {
+    spawnGate();
+    spawnDist = 0;
+  }
+
+  gates.forEach(g => {
+    g.y += speed;
+    if (!g.scored && g.y > player.y) {
+      g.scored = true;
+      score++;
     }
+  });
 
-    /* ================= LOOP ================= */
-    function loop() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.save();
-      applyShake();
+  obstacles.forEach(o => o.y = o.gate.y);
+  obstacles = obstacles.filter(o => o.y < canvas.height + 40);
+  gates = gates.filter(g => g.y < canvas.height + 40);
 
-      if (screen === "MENU") {
-        drawMenu();
-      } else {
-        updateGame();
-        drawGame();
-      }
-
-      ctx.restore();
-      requestAnimationFrame(loop);
-    }
-
-    function updateGame() {
-      if (!running) return;
-
-      if (startAnim > 0) startAnim -= 0.05;
-      if (flash > 0) flash -= 0.1;
-
-      player.x += (target.x - player.x) * 0.22;
-      player.y += (target.y - player.y) * 0.22;
-
-      spawnDist += speed;
-      if (spawnDist > 120) {
-        spawnGate();
-        spawnDist = 0;
-      }
-
-      gates.forEach((g) => {
-        g.y += speed;
-        if (!g.scored && g.y > player.y) {
-          g.scored = true;
-          score++;
-          flash = 1;
-        }
-      });
-
-      obstacles.forEach((o) => (o.y = o.gate.y));
-      obstacles = obstacles.filter((o) => o.y < canvas.height + 40);
-      gates = gates.filter((g) => g.y < canvas.height + 40);
-
-      for (const o of obstacles) {
-        if (hit(o)) {
-          addShake();
-          endGame();
-          break;
-        }
-      }
-
-      speed += 0.0008;
-    }
-
-    function endGame() {
-      running = false;
+  for (const o of obstacles) {
+    if (hit(o)) {
       bestScore = Math.max(bestScore, score);
       localStorage.setItem("bestScore", bestScore);
       screen = "MENU";
+      running = false;
+      break;
     }
+  }
 
-    /* ================= RESET ================= */
-    function resetGame() {
-      score = 0;
-      speed = 2;
-      patternIndex = 0;
-      spawnDist = 0;
-      obstacles = [];
-      gates = [];
-      startAnim = 1;
-      flash = 0;
+  speed += 0.0008;
+}
 
-      player.x = canvas.width / 2;
-      player.y = canvas.height - 120;
-      target.x = player.x;
-      target.y = player.y;
-    }
+/* ================= DRAW ================= */
+function drawBackground() {
+  const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  g.addColorStop(0, "#0e0e0e");
+  g.addColorStop(1, "#000");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
 
-    /* ================= DRAW ================= */
-    function drawBackground() {
-      const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
-      g.addColorStop(0, "#0e0e0e");
-      g.addColorStop(1, "#000");
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
+function drawGame() {
+  drawBackground();
 
-    function drawGame() {
-      drawBackground();
+  ctx.fillStyle = "#00ff88";
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, player.r, 0, Math.PI * 2);
+  ctx.fill();
 
-      if (flash > 0) {
-        ctx.fillStyle = `rgba(0,255,136,${flash * 0.15})`;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
+  obstacles.forEach(o => {
+    ctx.fillStyle = "#ff5c5c";
+    ctx.fillRect(o.x, o.y, o.w, o.h);
+  });
 
-      const scale = 1 + startAnim * 0.4;
+  ctx.fillStyle = "#fff";
+  ctx.font = "14px monospace";
+  ctx.fillText(`Score: ${score}`, 20, 28);
+}
 
-      ctx.shadowColor = "#00ff88";
-      ctx.shadowBlur = 14;
-      ctx.fillStyle = "#00ff88";
-      ctx.beginPath();
-      ctx.arc(player.x, player.y, player.r * scale, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
+function drawMenu() {
+  drawBackground();
+  ctx.fillStyle = "#00ff88";
+  ctx.font = "28px sans-serif";
+  ctx.fillText("Finger Runner", canvas.width / 2 - 110, canvas.height / 2 - 100);
 
-      obstacles.forEach((o) => {
-        ctx.fillStyle = "#ff5c5c";
-        ctx.fillRect(o.x, o.y, o.w, o.h);
-        ctx.strokeStyle = "#ff8a8a";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(o.x, o.y, o.w, o.h);
-      });
+  ctx.font = "18px sans-serif";
+  ctx.fillStyle = "#fff";
+  ctx.fillText("▶ Endless", canvas.width / 2 - 55, canvas.height / 2 - 20);
+  ctx.fillText("🌍 Global Run", canvas.width / 2 - 70, canvas.height / 2 + 15);
+  ctx.fillText("🎯 Levels", canvas.width / 2 - 50, canvas.height / 2 + 50);
 
-      ctx.fillStyle = "#fff";
-      ctx.font = "14px monospace";
-      ctx.fillText(`Score: ${score}`, 20, 28);
-    }
+  ctx.font = "13px monospace";
+  ctx.fillStyle = "#aaa";
+  ctx.fillText("Tap to select mode", canvas.width / 2 - 80, canvas.height / 2 + 90);
+}
 
-    function drawMenu() {
-      drawBackground();
+function drawLevelSelect() {
+  drawBackground();
+  ctx.fillStyle = "#fff";
+  ctx.font = "20px sans-serif";
+  ctx.fillText("Select Level", canvas.width / 2 - 70, canvas.height / 2 - 90);
 
-      ctx.fillStyle = "#00ff88";
-      ctx.font = "28px sans-serif";
-      ctx.fillText(
-        "Finger Runner",
-        canvas.width / 2 - 110,
-        canvas.height / 2 - 60
-      );
+  ctx.font = "16px monospace";
+  for (let i = 1; i <= 10; i++) {
+    const x = ((i - 1) % 5) * (canvas.width / 5) + 30;
+    const y = canvas.height / 2 + Math.floor((i - 1) / 5) * 50;
+    ctx.fillText(`Level ${i}`, x, y);
+  }
+}
 
-      ctx.fillStyle = "#fff";
-      ctx.font = "18px sans-serif";
-      ctx.fillText("PLAY (Global)", canvas.width / 2 - 70, canvas.height / 2);
-      ctx.font = "13px monospace";
-ctx.fillStyle = "#aaa";
-ctx.fillText(
-  "Same level for everyone",
-  canvas.width / 2 - 90,
-  canvas.height / 2 + 26
-);
+loop();
 
-
-      ctx.font = "14px monospace";
-      ctx.fillText(
-        `Best: ${bestScore}`,
-        canvas.width / 2 - 35,
-        canvas.height / 2 + 40
-      );
-    }
-
-    loop();
-
-    /* ================= SERVICE WORKER ================= */
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("sw.js");
-    }
-  </script>
+/* ================= SERVICE WORKER ================= */
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js");
+}
+</script>
 </body>
 </html>
-
